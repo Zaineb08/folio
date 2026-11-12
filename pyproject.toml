@@ -1,0 +1,39 @@
+[project]
+name = "folio"
+version = "0.1.0"
+description = "Ask questions of your Zotero library, locally, with page-level citations."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.27",
+    "numpy>=2.0",
+    "pymupdf>=1.25",
+    "sentence-transformers>=5.0",
+    "torch>=2.15",
+    "huggingface-hub>=0.26",
+    "anthropic>=2.5.0",
+    "keyring>=25.7.0",
+    "openpyxl>=3.1",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+package = false
+
+# The newest NVIDIA GPUs need a recent CUDA build, so PyTorch comes from its own index.
+# The same build runs on PCs without an NVIDIA GPU, on the CPU.
+[[tool.uv.index]]
+name = "pytorch-cu134"
+url = "https://download.pytorch.org/whl/cu134"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu134" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

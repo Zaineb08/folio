@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Folio</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-left" viewBox="0 0 16 16"><path d="M10 3L5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-right" viewBox="0 0 16 16"><path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-send" viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 16 16"><path d="M2 5h7M12 5h2M2 11h2M7 11h7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="10.5" cy="5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5.5" cy="11" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+</svg>
+
+<div class="app" id="app">
+  <aside class="rail">
+    <div class="brand">
+      <img src="/static/icon.svg" alt="" width="24" height="24">
+      <span>Folio</span>
+    </div>
+
+    <nav class="nav" aria-label="Sections">
+      <button type="button" class="nav-item" data-view="ask">Ask</button>
+      <button type="button" class="nav-item" data-view="sources">Find a source</button>
+      <button type="button" class="nav-item" data-view="matrix">Literature matrix</button>
+      <button type="button" class="nav-item" data-view="library">Library <span class="nav-count" id="nav-count"></span></button>
+      <button type="button" class="nav-item" data-view="discover">Discover</button>
+    </nav>
+
+    <div class="rail-section">
+      <div class="rail-heading">
+        <span>Conversations</span>
+        <button type="button" class="icon-btn" id="new-chat" title="New conversation" aria-label="New conversation"><svg width="14" height="14"><use href="#i-plus"/></svg></button>
+      </div>
+      <ul class="conv-list" id="conv-list"></ul>
+    </div>
+
+    <div class="rail-foot">
+      <div class="sync" id="sync" hidden>
+        <div class="sync-label" id="sync-label"></div>
+        <div class="sync-track"><div class="sync-bar" id="sync-bar"></div></div>
+      </div>
+      <dl class="status">
+        <div><dt><span class="dot" id="dot-zotero"></span>Zotero</dt><dd id="st-zotero">Checking</dd></div>
+        <div><dt><span class="dot" id="dot-llm"></span>Model</dt>
+          <dd><select id="model-select" aria-label="Answer model"></select></dd></div>
+      </dl>
+      <button type="button" class="link-btn" id="model-get" hidden></button>
+      <div class="sync" id="model-download" hidden>
+        <div class="sync-label" id="model-download-label"></div>
+        <div class="sync-track"><div class="sync-bar" id="model-download-bar"></div></div>
+      </div>
+      <button type="button" class="link-btn" id="manage-key">Add Claude API key</button>
+    </div>
+  </aside>
+
+  <main class="stage">
+    <!-- Ask -->
+    <section class="view" id="view-ask" hidden>
+      <div class="thread" id="thread">
+        <div class="welcome" id="welcome"></div>
+        <div class="messages" id="messages"></div>
+      </div>
+      <form class="composer" id="composer">
+        <div class="scope-chips" id="scope-chips"></div>
+        <div class="composer-box">
+          <textarea id="question" rows="1" placeholder="Ask your library a question" aria-label="Your question"></textarea>
+          <button type="submit" class="send" id="send" title="Send" aria-label="Send"><svg width="16" height="16"><use href="#i-send"/></svg></button>
+        </div>
+        <div class="composer-tools">
+          <div class="modes" role="radiogroup" aria-label="Kind of answer" id="modes">
+            <button type="button" role="radio" data-mode="answer" title="A direct answer">Answer</button>
+            <button type="button" role="radio" data-mode="review" title="A literature-review passage, organised by theme">Lit review</button>
+            <button type="button" role="radio" data-mode="compare" title="A table comparing what sources say">Compare</button>
+            <button type="button" role="radio" data-mode="gaps" title="Open questions and research gaps">Find gaps</button>
+          </div>
+          <div class="scope-wrap">
+            <button type="button" class="ghost-btn" id="scope-btn" aria-expanded="false"><svg width="14" height="14"><use href="#i-sliders"/></svg> <span id="scope-label">Whole library</span></button>
+            <div class="popover" id="scope-pop" hidden></div>
+          </div>
+        </div>
+        <p class="composer-note" id="model-note" hidden>Using Claude: the passages found for each question are sent to Anthropic, and each answer costs money.</p>
+      </form>
+    </section>
+
+    <!-- Find a source -->
+    <section class="view page" id="view-sources" hidden>
+      <header class="page-head">
+        <div>
+          <h1>Find a source</h1>
+          <p class="sub">Paste a sentence from your draft. Folio looks through your library for passages that support it or disagree with it, and shows you what they say.</p>
+        </div>
+      </header>
+      <form class="claim-form" id="claim-form">
+        <textarea id="claim-text" rows="3" maxlength="1500" aria-label="Sentence to find a source for" placeholder="For example: Developers who use AI assistants tend to write less secure code."></textarea>
+        <button type="submit" class="primary-btn" id="claim-go">Find sources</button>
+      </form>
+      <div id="claim-results"></div>
+    </section>
+
+    <!-- Literature matrix -->
+    <section class="view page" id="view-matrix" hidden>
+      <header class="page-head">
+        <div>
+          <h1>Literature matrix</h1>
+          <p class="sub">One row per paper, one column per question, so you can compare papers side by side. Each cell is a short note from that paper's own pages.</p>
+        </div>
+        <div class="page-actions">
+          <select id="mx-filter" aria-label="Which papers to show"></select>
+          <button type="button" class="primary-btn" id="mx-fill">Fill empty cells</button>
+          <a class="ghost-btn" id="mx-export" href="/api/matrix/export" download="literature-matrix.xlsx">Download for Excel</a>
+        </div>
+      </header>
+      <p class="lib-notice" id="mx-dupes" hidden></p>
+      <div class="mx-progress" id="mx-progress" hidden>
+        <div class="mx-progress-line"><span id="mx-progress-label"></span><button type="button" class="link-btn" id="mx-stop">Stop</button></div>
+        <div class="sync-track"><div class="sync-bar" id="mx-bar"></div></div>
+      </div>
+      <div class="mx-wrap" id="mx-wrap"><table class="mx-table" id="mx-table"></table></div>
+      <form class="mx-add" id="mx-add">
+        <input type="text" id="mx-label" maxlength="60" placeholder="New column, e.g. Languages" aria-label="Column name">
+        <input type="text" id="mx-question" maxlength="300" placeholder="What to look for, e.g. Which programming languages does the study cover?" aria-label="What to look for in each paper">
+        <button type="submit" class="ghost-btn">Add column</button>
+      </form>
+      <p class="mx-ideas" id="mx-ideas"></p>
+      <p class="claim-disclaimer">Cells are written by the model on this PC from up to 4 passages of each paper: its opening and the 3 that best match the column. Click a page number to check the note against the paper before you rely on it. "Not stated" means those passages didn't say, not that the paper doesn't.</p>
+    </section>
+
+    <!-- Library -->
+    <section class="view page" id="view-library" hidden>
+      <header class="page-head">
+        <div>
+          <h1>Library</h1>
+          <p class="sub" id="lib-summary"></p>
+        </div>
+        <div class="page-actions">
+          <input type="search" id="lib-filter" placeholder="Filter by title, author or tag" aria-label="Filter articles">
+          <button type="button" class="ghost-btn" id="open-zotero">Open Zotero</button>
+          <button type="button" class="ghost-btn" id="sync-now">Sync now</button>
+        </div>
+      </header>
+      <div class="lib-notice" id="lib-notice" hidden></div>
+      <ul class="lib-list" id="lib-list"></ul>
+    </section>
+
+    <!-- Discover -->
+    <section class="view page" id="view-discover" hidden>
+      <header class="page-head">
+        <div>
+          <h1>Discover</h1>
+          <p class="sub">Search scholarly works on OpenAlex and add them to Zotero. Only what you type here leaves this PC.</p>
+        </div>
+      </header>
+      <form class="disc-form" id="disc-form">
+        <input type="search" id="disc-q" placeholder="Topic, method, author or title" aria-label="Search for articles">
+        <button type="submit" class="primary-btn">Search</button>
+        <label class="check"><input type="checkbox" id="disc-oa" checked> Open access only</label>
+        <label class="field">Since <input type="number" id="disc-year" min="1500" max="2100" placeholder="Any" aria-label="Published since year"></label>
+        <label class="field">Sort
+          <select id="disc-sort">
+            <option value="relevance">Relevance</option>
+            <option value="cited">Most cited</option>
+            <option value="newest">Newest</option>
+          </select>
+        </label>
+      </form>
+      <ul class="disc-list" id="disc-list"></ul>
+    </section>
+  </main>
+
+  <aside class="viewer" id="viewer" hidden aria-label="Source">
+    <header class="viewer-head">
+      <div class="viewer-title">
+        <div class="viewer-cite" id="v-cite"></div>
+        <div class="viewer-doc" id="v-title"></div>
+      </div>
+      <button type="button" class="icon-btn" id="v-close" title="Close (Esc)" aria-label="Close source"><svg width="16" height="16"><use href="#i-x"/></svg></button>
+    </header>
+    <div class="viewer-tools">
+      <div class="pager">
+        <button type="button" class="icon-btn" id="v-prev" title="Previous page" aria-label="Previous page"><svg width="16" height="16"><use href="#i-left"/></svg></button>
+        <span id="v-page"></span>
+        <button type="button" class="icon-btn" id="v-next" title="Next page" aria-label="Next page"><svg width="16" height="16"><use href="#i-right"/></svg></button>
+      </div>
+      <div class="viewer-actions">
+        <button type="button" class="ghost-btn" id="v-explain">Explain this paper</button>
+        <button type="button" class="ghost-btn" id="v-zotero">Open in Zotero</button>
+      </div>
+    </div>
+    <div class="viewer-body" id="v-body">
+      <img id="v-img" alt="">
+      <blockquote class="viewer-passage" id="v-passage" hidden></blockquote>
+    </div>
+  </aside>
+</div>
+
+<dialog class="key-dialog" id="key-dialog" aria-labelledby="key-title">
+  <h2 id="key-title">Use Claude for answers</h2>
+  <p>Claude needs an API key from Anthropic. A claude.ai subscription doesn't include one: the API has its own account and prepaid credit, at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>.</p>
+  <ul>
+    <li><strong>What leaves this PC:</strong> the passages found for each question, plus the question. Only while Claude is selected.</li>
+    <li><strong>Cost:</strong> each answer shows what it cost. Your local model stays free.</li>
+    <li><strong>Your key:</strong> Folio checks it with Anthropic, then keeps it in Windows Credential Manager, not in a file.</li>
+  </ul>
+  <label for="key-input">API key</label>
+  <input type="password" id="key-input" autocomplete="off" spellcheck="false" placeholder="sk-ant-...">
+  <p class="key-error" id="key-error" role="alert" hidden></p>
+  <div class="key-actions">
+    <button type="button" class="link-btn" id="key-remove" hidden>Remove saved key</button>
+    <span class="key-spacer"></span>
+    <button type="button" class="ghost-btn" id="key-cancel">Cancel</button>
+    <button type="button" class="primary-btn" id="key-save">Save key</button>
+  </div>
+</dialog>
+
+<div class="toast" id="toast" role="status" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
