@@ -191,7 +191,8 @@ def _read_stream(response: httpx.Response) -> Iterator[str]:
             return
 
 
-def chat_once(model: str, messages: list[dict], num_predict: int = 128) -> str:
+def chat_once(model: str, messages: list[dict], num_predict: int = 128, num_ctx: int | None = None) -> str:
+    """num_ctx keeps a model already loaded with that context from being loaded again, which takes a while for large models."""
     if claude.is_claude(model):
         return claude.chat_once(model, messages)
-    return "".join(chat_stream(model, messages, num_predict=num_predict, temperature=0.0)).strip()
+    return "".join(chat_stream(model, messages, num_predict=num_predict, temperature=0.0, num_ctx=num_ctx or config.NUM_CTX)).strip()

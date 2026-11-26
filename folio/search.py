@@ -119,6 +119,8 @@ def retrieve(query: str, scope: Scope | None = None, k: int = 8, per_doc: int = 
     allowed = (scope or Scope()).resolve(list(docs.values()))
     if allowed is not None and not allowed:
         return []
+    scoped = allowed is not None
+    allowed = _one_copy_each(allowed, docs)
 
     query_vector = engine.encode_query(query)
     dense = store.vector_index.search(query_vector, allowed, _CANDIDATES)
@@ -140,7 +142,7 @@ def retrieve(query: str, scope: Scope | None = None, k: int = 8, per_doc: int = 
     scores = _score(query, candidates, chunks, docs)
 
     # A narrow scope means the reader wants those papers read closely, so no per-paper cap.
-    cap = k if allowed is not None and len(allowed) <= 2 else per_doc
+    cap = k if scoped and len(allowed) <= 2 else per_doc
     ranked = sorted(zip(candidates, scores), key=lambda pair: float(pair[1]), reverse=True)
 
     if allow_overview and not named and is_about_whole_library(query) and (not ranked or float(ranked[0][1]) < _WEAK_MATCH):
@@ -200,6 +202,117 @@ def best_in_paper(doc_key: str, question: str, extra_terms: str = "", k: int = 3
 
 def is_about_whole_library(question: str) -> bool:
     return bool(_WHOLE_LIBRARY.search(question))
+
+
+# ------------------------------------------------------------ one copy of each paper
+
+
+def _title_key(doc: dict) -> str:
+    return re.sub(r"[^a-z0-9]", "", (doc.get("title") or "").lower()) or doc["key"]
+
+
+def one_per_paper(docs: list[dict]) -> list[dict]:
+    """Zotero libraries often hold the same paper twice. Keep the copy with the PDF, or the most text."""
+    best: dict[str, dict] = {}
+    for doc in docs:
+        title = _title_key(doc)
+        current = best.get(title)
+        if current is None or (bool(doc.get("pdf_path")), doc.get("chunks") or 0) > (bool(current.get("pdf_path")), current.get("chunks") or 0):
+            best[title] = doc
+    return list(best.values())
+
+
+def _one_copy_each(allowed: set[str] | None, docs: dict[str, dict]) -> set[str]:
+    """The allowed documents with duplicates folded into one copy, so a paper in Zotero three times isn't read three times."""
+    chosen = {_title_key(doc): doc["key"] for doc in one_per_paper(list(docs.values()))}
+    keys = docs.keys() if allowed is None else allowed
+    return {chosen[_title_key(docs[key])] for key in keys if key in docs}
+
+
+# --------------------------------------------------------- papers a question names
+
+
+def _flat(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def _first_author(doc: dict, index: int = 0) -> str:
+    creators = doc.get("creators") or []
+    authors = [c for c in creators if c.get("type") == "author"] or creators
+    return authors[index].get("last", "") if len(authors) > index else ""
+
+
+def _where_named(question: str, flat_question: str, doc: dict) -> int | None:
+    """Where the question names this paper, by its title or a distinctive short name such as "CodeHalu"."""
+    title = doc.get("title") or ""
+    for candidate in (title, title.split(":")[0]):
+        flat = _flat(candidate)
+        if len(flat.split()) >= 3:
+            at = f" {flat_question} ".find(f" {flat} ")
+            if at >= 0:
+                return at
+    short = title.split(":")[0].strip()
+    if ":" in title and 1 <= len(short.split()) <= 2 and len(short) >= 4 and not short.islower():
+        match = re.search(rf"(?<!\w){re.escape(short)}(?!\w)", question)  # Case matters: "SPLASH", not "splash".
+        if match:
+            return len(_flat(question[: match.start()]))
+    return None
+
+
+def named_papers(question: str, scope: Scope | None = None) -> list[str]:
+    """The papers a question names, by title or first author, in the order it names them, one copy each."""
+    docs = {doc["key"]: doc for doc in store.list_docs()}
+    allowed = _one_copy_each((scope or Scope()).resolve(list(docs.values())), docs)
+    flat_question = _flat(question)
+    found: dict[str, int] = {}
+    by_author: dict[str, list[tuple[int, int, str]]] = {}
+    for key in allowed:
+        doc = docs[key]
+        at = _where_named(question, flat_question, doc)
+        if at is not None:
+            found[key] = at
+            continue
+        surname = _first_author(doc)
+        if len(surname) < 2:
+            continue
+        match = re.search(rf"(?<!\w){re.escape(surname)}(?!\w)", question)
+        if not match:
+            continue
+        # "Rahman et Kundu, 2024" should pick that paper, not another by a Rahman.
+        nearby = question[match.start() : match.end() + 60]
+        second = _first_author(doc, 1)
+        score = (str(doc.get("year") or "") in nearby) + bool(second and re.search(rf"(?<!\w){re.escape(second)}(?!\w)", nearby))
+        by_author.setdefault(surname.lower(), []).append((score, len(_flat(question[: match.start()])), key))
+    for candidates in by_author.values():
+        best = max(score for score, _, _ in candidates)
+        for score, at, key in candidates:
+            if score == best and key not in found:
+                found[key] = at
+    return sorted(found, key=lambda key: found[key])
+
+
+def passages_per_paper(doc_keys: list[str], aspects: list[str], per_paper: int) -> list[dict]:
+    """For each paper in turn, its opening and then its best passage for each part of the question.
+
+    Each paper gets its own share, so one that matches the wording well can't crowd out the
+    others, and every paper the student named is read.
+    """
+    hits: list[dict] = []
+    for key in doc_keys:
+        doc = store.get_doc(key)
+        rows = store.chunks_of(key)
+        if not doc or not rows:
+            continue
+        ranked = [best_in_paper(key, aspect, k=per_paper) for aspect in aspects]
+        scores = {rows[0]["id"]: 1.0}
+        for rank in range(per_paper):
+            for found in ranked:
+                if len(scores) < per_paper and rank < len(found):
+                    scores.setdefault(found[rank]["chunk_id"], found[rank]["score"])
+        chunks = store.get_chunks(list(scores))
+        for chunk in sorted(chunks.values(), key=lambda chunk: chunk["ord"]):  # Read in the paper's own order.
+            hits.append({**_hit(chunk, doc, scores[chunk["id"]]), "named": True})
+    return hits
 
 
 def _named_docs(query: str, docs: dict[str, dict], allowed: set[str] | None) -> list[str]:

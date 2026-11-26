@@ -15,5 +15,5 @@ class Declined(LLMError):
         kind = f" ({category})" if category else ""
         super().__init__(
             f"Claude's safety filter declined this question{kind}. That can happen with security topics, "
-            "even for legitimate research. Try rewording it, or switch to the model on this PC."
+            "even for legitimate research. Try rewording it, or switch to a local model."
         )

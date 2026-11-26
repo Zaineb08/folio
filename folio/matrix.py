@@ -3,7 +3,7 @@
 Cells are filled one at a time, each from the passages of that paper that best answer its
 column's question, plus the paper's opening. That keeps every cell tied to pages the student
 can check, and lets a question asked meanwhile slip in between two cells instead of waiting
-for the whole matrix. Only the model on this PC fills cells: a matrix takes dozens of calls,
+for the whole matrix. Only the local model fills cells: a matrix takes dozens of calls,
 which Claude would charge for.
 """
 
@@ -15,7 +15,7 @@ import re
 import threading
 import time
 
-from . import cite, config, llm, store
+from . import cite, config, llm, search, store
 from .answer import _CITATION, _INNER_REFERENCE, _excerpt_block, _numbers_in, generation_lock
 from .models import engine, gpu_lock
 from .search import _hit, best_in_paper
@@ -67,7 +67,7 @@ If the excerpts don't say, reply only: Not stated"""
 def _local_model() -> str:
     model = config.load_settings()["local_model"]
     if model not in llm.list_models():
-        raise llm.LLMError("The matrix is filled by the model on this PC, and Folio can't reach it. Start Ollama, then try again.")
+        raise llm.LLMError("The matrix is filled by the local model, and Folio can't reach it. Start Ollama, then try again.")
     return model
 
 
@@ -212,14 +212,7 @@ filler = Filler()
 
 
 def _one_per_paper(docs: list[dict]) -> list[dict]:
-    """Zotero libraries often hold the same paper twice. Keep the copy with the PDF, or the most text."""
-    best: dict[str, dict] = {}
-    for doc in docs:
-        title = re.sub(r"[^a-z0-9]", "", (doc.get("title") or "").lower()) or doc["key"]
-        current = best.get(title)
-        if current is None or (bool(doc.get("pdf_path")), doc.get("chunks") or 0) > (bool(current.get("pdf_path")), current.get("chunks") or 0):
-            best[title] = doc
-    return list(best.values())
+    return search.one_per_paper(docs)
 
 
 def overview() -> dict:

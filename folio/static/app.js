@@ -203,7 +203,6 @@ async function refreshStatus() {
   $("dot-zotero").className = `dot ${z.found ? "ok" : "warn"}`;
   $("st-zotero").textContent = !z.installed && !z.found ? "Not installed" : !z.found ? "Open it once" : z.running ? "Connected" : "Library found";
 
-  $("dot-llm").className = `dot ${status.llm.up && status.llm.installed ? "ok" : "bad"}`;
   renderModelMenu(status);
 
   const count = status.library.docs;
@@ -239,6 +238,17 @@ function isClaude(model) {
   return !!state.status?.claude.models.some((m) => m.id === model);
 }
 
+// Friendly names and one-line descriptions for Folio's own models. Others show their Ollama name.
+const MODEL_INFO = {
+  "qwen3.5:9b": { name: "Qwen 3.5 · 9B", desc: "Most thorough · best with a graphics card" },
+  "qwen3.5:4b": { name: "Qwen 3.5 · 4B", desc: "Lighter · fine without a graphics card" },
+};
+
+function modelName(model) {
+  const claude = state.status?.claude.models.find((m) => m.id === model);
+  return claude ? claude.label : MODEL_INFO[model]?.name || model;
+}
+
 // Folio's own models that aren't downloaded yet, offered in the menu with their size.
 function missingModel(model) {
   const status = state.status;
@@ -246,55 +256,125 @@ function missingModel(model) {
   return status.suggested.find((m) => m.id === model) || null;
 }
 
-function localLabel(model, status) {
-  const info = status.suggested.find((m) => m.id === model);
-  const fits = info?.suits ? ", suits this PC" : "";
-  if (!status.llm.models.includes(model) && info) return `${model} (download ${info.download_gb} GB${fits})`;
-  return `${model}${fits}`;
+function downloadPercent(download) {
+  return download.total ? Math.round((download.done / download.total) * 100) : 0;
 }
 
 function renderModelMenu(status) {
-  const select = $("model-select");
-  const selectedIsClaude = status.claude.models.some((m) => m.id === status.llm.selected);
-  const local = [...new Set([...status.llm.models, ...status.suggested.map((m) => m.id)])];
-  if (!selectedIsClaude && !local.includes(status.llm.selected)) local.unshift(status.llm.selected);
-  const signature = JSON.stringify([local, status.llm.models, status.suggested, status.claude.models, status.claude.has_key]);
-  if (select.dataset.list !== signature) {
-    select.dataset.list = signature;
-    const option = (value, label) => `<option value="${esc(value)}">${esc(label)}</option>`;
-    select.innerHTML =
-      `<optgroup label="On this PC">${local.map((m) => option(m, localLabel(m, status))).join("")}</optgroup>` +
-      `<optgroup label="Claude: passages go to Anthropic">${status.claude.models
-        .map((m) => option(m.id, status.claude.has_key ? m.label : `${m.label} (add key)`)).join("")}</optgroup>`;
-  }
-  if (document.activeElement !== select) select.value = status.llm.selected;
+  const selected = status.llm.selected;
+  const selectedIsClaude = isClaude(selected);
+  const download = status.download;
+  const ready = status.llm.up && status.llm.installed;
+
+  $("dot-llm").className = `dot ${ready ? "ok" : download.active ? "warn" : "bad"}`;
+  $("model-name").textContent = modelName(selected);
+  $("model-trigger").title = selectedIsClaude ? "Answers come from Claude: the passages found are sent to Anthropic." : "Answers are written on your computer.";
   $("model-note").hidden = !selectedIsClaude;
-  $("manage-key").textContent = status.claude.has_key ? "Manage Claude API key" : "Add Claude API key";
 
   // The selected model isn't downloaded yet, for example on a first start: offer it.
-  const download = status.download;
-  const missing = missingModel(status.llm.selected);
+  const missing = missingModel(selected);
   const get = $("model-get");
   get.hidden = !missing || download.active;
-  if (missing) get.textContent = `Download ${missing.id} (${missing.download_gb} GB)`;
+  if (missing) get.textContent = `Download ${modelName(missing.id)} · ${missing.download_gb} GB`;
 
-  const box = $("model-download");
-  box.hidden = !download.active;
+  $("model-download").hidden = !download.active;
   if (download.active) {
-    const percent = download.total ? Math.round((download.done / download.total) * 100) : 0;
-    $("model-download-label").textContent = download.total ? `Downloading ${download.model}: ${percent}%` : `Starting the download of ${download.model}`;
-    $("model-download-bar").style.width = `${percent}%`;
+    $("model-download-label").textContent = download.total
+      ? `Downloading ${modelName(download.model)} · ${downloadPercent(download)}%`
+      : `Starting the download of ${modelName(download.model)}`;
+    $("model-download-bar").style.width = `${downloadPercent(download)}%`;
   }
   if (state.downloading && !download.active) {
-    toast(download.error || `${download.model} is downloaded and ready.`);
+    toast(download.error || `${modelName(download.model)} is downloaded and ready.`);
   }
   state.downloading = download.active;
+  if (!$("model-menu").hidden) renderModelItems();
+}
+
+function renderModelItems() {
+  const status = state.status;
+  const selected = status.llm.selected;
+  const download = status.download;
+  const local = [...new Set([...status.llm.models, ...status.suggested.map((m) => m.id)])];
+  if (!isClaude(selected) && !local.includes(selected)) local.unshift(selected);
+  // Recommend a model only before any of Folio's own is downloaded, to help with a first start.
+  const firstStart = !status.suggested.some((m) => status.llm.models.includes(m.id));
+
+  const item = (id, name, desc, side, extra = "") => {
+    const checked = id === selected;
+    return `<button type="button" role="menuitemradio" aria-checked="${checked}" class="model-item${checked ? " is-selected" : ""}" data-model="${esc(id)}"${extra}>
+      <span class="mi-text"><span class="mi-name">${esc(name)}</span><span class="mi-desc">${esc(desc)}</span></span>
+      <span class="mi-side">${side}</span></button>`;
+  };
+  const check = `<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="m3 7.5 2.6 2.5L11 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+  const localItems = local.map((id) => {
+    const info = status.suggested.find((m) => m.id === id);
+    const installed = status.llm.models.includes(id);
+    const desc = MODEL_INFO[id]?.desc || "Installed with Ollama";
+    let side = id === selected && installed ? check : "";
+    if (download.active && download.model === id) side = `<span class="mi-tag">${downloadPercent(download)}%</span>`;
+    else if (!installed && info) side = `<span class="mi-tag" title="Not downloaded yet">↓ ${info.download_gb} GB</span>`;
+    if (!installed && info && firstStart && info.suits) side = `<span class="mi-tag is-rec">Recommended</span>` + side;
+    const row = item(id, modelName(id), desc, side);
+    if (state.confirmDownload !== id) return row;
+    return row + `<div class="mi-confirm" role="group" aria-label="Download ${esc(modelName(id))}">
+      <p>Download ${esc(info.download_gb)} GB and switch to it? You can keep using Folio meanwhile.</p>
+      <div class="mi-actions"><button type="button" class="primary-btn" data-download="${esc(id)}">Download</button>
+      <button type="button" class="ghost-btn" data-download-cancel>Cancel</button></div></div>`;
+  }).join("");
+
+  const claudeItems = status.claude.models.map((m) => item(
+    m.id, m.label, "Most careful answers · paid per question",
+    m.id === selected ? check : status.claude.has_key ? "" : `<span class="mi-tag">Add key</span>`,
+  )).join("");
+
+  $("model-menu").innerHTML = `
+    <div class="mm-group"><div class="mm-head"><span>Local</span><span>Free · nothing leaves your computer</span></div>${localItems}</div>
+    <div class="mm-group"><div class="mm-head"><span>Claude</span><span>Sends the passages found to Anthropic</span></div>${claudeItems}</div>
+    <div class="mm-foot"><button type="button" class="link-btn" data-manage-key>${status.claude.has_key ? "Manage Claude API key" : "Add Claude API key"}</button></div>`;
+}
+
+function openModelMenu() {
+  if (!state.status) return;
+  state.confirmDownload = null;
+  renderModelItems();
+  $("model-menu").hidden = false;
+  $("model-trigger").setAttribute("aria-expanded", "true");
+  ($("model-menu").querySelector(".is-selected") || $("model-menu").querySelector(".model-item"))?.focus();
+}
+
+function closeModelMenu(focusTrigger = false) {
+  if ($("model-menu").hidden) return;
+  $("model-menu").hidden = true;
+  state.confirmDownload = null;
+  $("model-trigger").setAttribute("aria-expanded", "false");
+  if (focusTrigger) $("model-trigger").focus();
+}
+
+async function pickModel(model) {
+  if (missingModel(model)) {
+    state.confirmDownload = state.confirmDownload === model ? null : model;
+    renderModelItems();
+    $("model-menu").querySelector("[data-download]")?.focus();
+    return;
+  }
+  closeModelMenu(true);
+  if (model === state.status.llm.selected) return;
+  if (isClaude(model) && !state.status.claude.has_key) {
+    openKeyDialog(model);
+    return;
+  }
+  try {
+    await chooseModel(model);
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 async function downloadModel(model) {
-  const info = missingModel(model);
-  if (!info) return;
-  if (!confirm(`Download ${model}? It's ${info.download_gb} GB, and Folio switches to it once it's done. You can keep using Folio meanwhile.`)) return;
+  if (!missingModel(model)) return;
+  closeModelMenu(true);
   try {
     state.status.download = await api("/api/models/download", { body: { model, select: true } });
     renderModelMenu(state.status);
@@ -346,13 +426,14 @@ async function removeKey() {
   const status = await api("/api/status");
   state.status = status;
   renderModelMenu(status);
-  toast("Key removed. Folio is back on the model on this PC.");
+  toast("Key removed. Folio is back on a local model.");
 }
 
 async function chooseModel(model) {
   await api("/api/settings", { body: { llm_model: model } });
   state.status.llm.selected = model;
-  $("model-select").value = model;
+  state.status.llm.installed = isClaude(model) ? state.status.claude.has_key : state.status.llm.models.includes(model);
+  state.status.llm.up = isClaude(model) ? state.status.claude.has_key : state.status.llm.models.length > 0;
   renderModelMenu(state.status);
 }
 
@@ -366,13 +447,46 @@ function metaLine(meta) {
   if (meta.provider === "claude") {
     parts.push(meta.fell_back ? `${meta.label} declined, so ${meta.served_label} wrote this` : `Written by ${meta.served_label}`);
     if (meta.cost_usd !== null && meta.cost_usd !== undefined) parts.push(`about ${formatCost(meta.cost_usd)}`);
-    if (meta.checked_by && meta.checked_by !== meta.model) parts.push(`checked on this PC by ${meta.checked_by}`);
+    if (meta.checked_by && meta.checked_by !== meta.model) parts.push(`checked locally by ${modelName(meta.checked_by)}`);
     if (meta.truncated) parts.push("cut off at the length limit");
   } else {
-    parts.push(`Written on this PC by ${meta.model}`);
+    parts.push(`Written locally by ${modelName(meta.model)}`);
   }
-  if (meta.coverage) parts.push(`based on ${meta.coverage.used} of ${meta.coverage.total} passages from this paper`);
+  if (meta.full_read) {
+    const { papers, passages, shortened } = meta.full_read;
+    parts.push(papers === 1 ? `read the paper in full, ${plural(passages, "passage")}` : `read the ${papers} papers in full, ${plural(passages, "passage")}`);
+    if (shortened?.length) parts.push(`too long to read whole: ${shortened.join(", ")}`);
+    if (meta.papers_inherited) parts.push("the papers from earlier in this conversation");
+  } else if (meta.coverage) parts.push(`based on ${meta.coverage.used} of ${meta.coverage.total} passages from this paper`);
+  if (meta.per_paper && meta.papers) {
+    parts.push(`read up to ${meta.per_paper} passages from each of the ${meta.papers.length} papers ${meta.papers_inherited ? "from earlier in this conversation" : "you named"}`);
+  }
   return `<p class="msg-meta">${esc(parts.join(" · "))}</p>`;
+}
+
+// Folio's own comparison of the papers' reference lists, shown apart from the model's answer.
+function sharedReferencesHtml(shared) {
+  if (!shared) return "";
+  const missing = shared.missing?.length ? ` Folio couldn't find a reference list in ${shared.missing.join(", ")}.` : "";
+  if (!shared.works.length) {
+    return `<p class="sources-title">References they share</p>
+      <p class="share-note">No work appears by title in the reference lists of two or more of these papers.${esc(missing)}</p>`;
+  }
+  const rows = shared.works.map((work) => `<li>
+      <span class="share-count">${work.count} of ${shared.papers}</span>
+      <span><span class="share-title">${esc(work.title)}</span>
+      <span class="share-by">${work.cited_by.map((c) => `<button type="button" class="link-btn" data-ref-doc="${esc(c.doc_key)}" data-ref-page="${c.page}" title="See it in this paper's reference list, p. ${c.page}">${esc(c.cite)}</button>`).join(" · ")}</span></span>
+    </li>`).join("");
+  return `<p class="sources-title">References they share</p>
+    <ul class="shared-refs">${rows}</ul>
+    <p class="share-note">Folio compared the papers' reference lists itself, matching works by their titles, so this part doesn't come from the model.
+      A work cited under a different title, or only as a web page, isn't counted. Click a paper to see the entry in its reference list.${esc(missing)}</p>`;
+}
+
+async function openReferenceEntry(target) {
+  const doc = (await libraryData()).docs.find((d) => d.key === target.dataset.refDoc);
+  if (!doc) return toast("That article is no longer in your library.");
+  openViewer({ doc_key: doc.key, page: Number(target.dataset.refPage), chunk_id: null, cite: doc.cite, title: doc.title, has_pdf: doc.has_pdf, pages: doc.pages }, target);
 }
 
 const EVIDENCE_NOTES = {
@@ -476,10 +590,50 @@ function addUserMessage(text) {
 function addAssistantMessage() {
   const el = document.createElement("div");
   el.className = "msg msg-assistant";
-  el.innerHTML = `<div class="msg-status" hidden><span class="pulse"></span><span class="msg-status-text"></span></div>
+  el.innerHTML = `<details class="steps" hidden><summary></summary><ol></ol></details>
+    <div class="msg-status" hidden><span class="pulse"></span><span class="msg-status-text"></span></div>
     <p class="evidence-note" hidden></p><div class="answer"></div><div class="msg-foot"></div>`;
   $("messages").append(el);
   return el;
+}
+
+// Research mode's searches, listed as they run and kept with the answer.
+function stepText(step) {
+  if (step.kind === "read") {
+    return step.passages < step.total
+      ? `Read ${step.cite}: the first ${step.passages} of its ${step.total} passages, as much as fits`
+      : `Read ${step.cite} in full: ${plural(step.passages, "passage")}`;
+  }
+  const found = step.passages
+    ? `${plural(step.passages, "passage")} from ${plural(step.papers, "paper")}`
+    : "nothing relevant";
+  return `${step.round > 1 ? "Searched again" : "Searched"} for “${step.query}”: ${found}`;
+}
+
+function addStep(el, step) {
+  const box = el.querySelector(".steps");
+  box.hidden = false;
+  box.open = true;
+  box.querySelector("summary").textContent = step.kind === "read" ? "Reading your papers" : "Searching your papers";
+  const item = document.createElement("li");
+  item.textContent = stepText(step);
+  box.querySelector("ol").append(item);
+}
+
+function showSteps(el, steps, sources) {
+  const box = el.querySelector(".steps");
+  if (!steps?.length) { box.hidden = true; return; }
+  box.hidden = false;
+  box.open = false;
+  box.querySelector("ol").innerHTML = steps.map((step) => `<li>${esc(stepText(step))}</li>`).join("");
+  if (steps[0].kind === "read") {
+    const read = steps.reduce((total, step) => total + step.passages, 0);
+    box.querySelector("summary").textContent = `Read ${plural(steps.length, "paper")} in full, ${plural(read, "passage")}`;
+    return;
+  }
+  const papers = new Set(sources.map((s) => s.doc_key)).size;
+  box.querySelector("summary").textContent =
+    `Searched ${plural(steps.length, "time")}, then read ${plural(sources.length, "passage")} from ${plural(papers, "paper")}`;
 }
 
 function setStatus(el, text) {
@@ -503,6 +657,7 @@ function finishAssistant(el, text, sources = [], checks = null, stopped = false,
   messageSources.set(el, sources);
   setStatus(el, "");
   setEvidence(el, meta?.evidence);
+  showSteps(el, meta?.steps, sources);
   el.querySelector(".answer").innerHTML = renderMarkdown(text, { sources, flags: checks?.flags });
   const foot = el.querySelector(".msg-foot");
   if (!sources.length) { foot.innerHTML = ""; return; }
@@ -532,6 +687,7 @@ function finishAssistant(el, text, sources = [], checks = null, stopped = false,
       <button type="button" class="link-btn" data-act="copy">Copy with references</button>
       <button type="button" class="link-btn" data-act="bibtex">Copy BibTeX</button>
     </div>
+    ${sharedReferencesHtml(meta?.references)}
     ${cited.length ? `<p class="sources-title">Cited</p><ul class="sources">${cited.map(sourceRow).join("")}</ul>` : ""}
     ${others.length ? `<details class="more-sources"><summary>${plural(others.length, "more passage")} searched, not cited</summary><ul class="sources">${others.map(sourceRow).join("")}</ul></details>` : ""}`;
   el.dataset.answer = text;
@@ -593,6 +749,7 @@ async function ask(question, mode = state.mode) {
   const handlers = {
     conversation: (e) => { state.conversationId = e.id; refreshConversations(); },
     status: (e) => setStatus(el, e.text),
+    step: (e) => { addStep(el, e); scrollThread(); },
     sources: (e) => { sources = e.sources; messageSources.set(el, sources); setEvidence(el, e.evidence); },
     token: (e) => { text += e.text; if (!frame) frame = requestAnimationFrame(repaint); },
     check: (e) => { checks = e; },
@@ -841,10 +998,12 @@ async function openViewer(source, trigger) {
   document.querySelector(".pager").hidden = !hasPdf;
 
   if (hasPdf) {
-    try {
-      const chunk = await api(`/api/chunk/${source.chunk_id}`);
-      if (state.viewer?.source === source) state.viewer.rects = chunk.rects || [];
-    } catch { /* The page still shows, just without scrolling to the passage. */ }
+    if (source.chunk_id != null) {  // A reference-list entry has a page but no passage to highlight.
+      try {
+        const chunk = await api(`/api/chunk/${source.chunk_id}`);
+        if (state.viewer?.source === source) state.viewer.rects = chunk.rects || [];
+      } catch { /* The page still shows, just without scrolling to the passage. */ }
+    }
     showViewerPage(true);
   }
 }
@@ -868,7 +1027,7 @@ function showViewerPage(scrollToPassage = false) {
       $("v-body").scrollTop = Math.max(0, top * ratio - 80);
     }
   };
-  img.src = `/api/page/${encodeURIComponent(source.doc_key)}/${page}?chunk=${source.chunk_id}`;
+  img.src = `/api/page/${encodeURIComponent(source.doc_key)}/${page}${source.chunk_id != null ? `?chunk=${source.chunk_id}` : ""}`;
 }
 
 function closeViewer() {
@@ -907,6 +1066,7 @@ document.addEventListener("click", (event) => {
   if (target.dataset.zoteroDoc) return openInZotero(target.dataset.zoteroDoc);
   if (target.dataset.askDoc) return askAboutDoc(target.dataset.askDoc);
   if (target.dataset.explainDoc) return explainDoc(target.dataset.explainDoc);
+  if (target.dataset.refDoc) return openReferenceEntry(target);
   if (target.dataset.mxDoc) return openMatrixSource(target);
   if (target.dataset.mxRemove) return removeMatrixColumn(Number(target.dataset.mxRemove)).catch((error) => toast(error.message));
   if (target.dataset.mxIdea !== undefined) {
@@ -1160,7 +1320,7 @@ function renderMatrix() {
   fill.disabled = job.running || !pending;
   fill.textContent = job.running ? "Filling" : pending ? `Fill ${plural(pending, "empty cell")}` : "All cells filled";
   const minutes = Math.max(1, Math.round((pending * (job.seconds_per_cell || 3.5)) / 60));
-  fill.title = pending ? `About ${minutes} minute${minutes === 1 ? "" : "s"} on the model on this PC. You can keep using Folio meanwhile.` : "";
+  fill.title = pending ? `About ${minutes} minute${minutes === 1 ? "" : "s"} on the local model. You can keep using Folio meanwhile.` : "";
 
   $("mx-progress").hidden = !job.running;
   if (job.running) {
@@ -1282,27 +1442,41 @@ $("question").addEventListener("keydown", (event) => {
   }
 });
 $("new-chat").addEventListener("click", newConversation);
-$("model-select").addEventListener("change", async (event) => {
-  const model = event.target.value;
-  if (isClaude(model) && !state.status.claude.has_key) {
-    event.target.value = state.status.llm.selected;
-    openKeyDialog(model);
-    return;
-  }
-  if (missingModel(model)) {
-    event.target.value = state.status.llm.selected;
-    downloadModel(model);
-    return;
-  }
-  try {
-    await chooseModel(model);
-  } catch (error) {
-    event.target.value = state.status.llm.selected;
-    toast(error.message);
+$("model-trigger").addEventListener("click", () => ($("model-menu").hidden ? openModelMenu() : closeModelMenu()));
+$("model-trigger").addEventListener("keydown", (event) => {
+  if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); openModelMenu(); }
+});
+$("model-menu").addEventListener("click", (event) => {
+  // Handled here alone: the menu re-renders on a click, which would make outside-click checks misfire.
+  event.stopPropagation();
+  const target = event.target.closest("button");
+  if (!target) return;
+  if (target.dataset.model) pickModel(target.dataset.model);
+  else if (target.dataset.download) downloadModel(target.dataset.download);
+  else if ("downloadCancel" in target.dataset) { state.confirmDownload = null; renderModelItems(); }
+  else if ("manageKey" in target.dataset) { closeModelMenu(); openKeyDialog(); }
+});
+$("model-menu").addEventListener("keydown", (event) => {
+  const items = [...$("model-menu").querySelectorAll("button")];
+  const index = items.indexOf(document.activeElement);
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    items[(index + step + items.length) % items.length]?.focus();
+  } else if (event.key === "Escape") {
+    event.stopPropagation();
+    closeModelMenu(true);
+  } else if (event.key === "Tab") {
+    closeModelMenu();
   }
 });
-$("manage-key").addEventListener("click", () => openKeyDialog());
-$("model-get").addEventListener("click", () => downloadModel(state.status.llm.selected));
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("#model-picker")) closeModelMenu();
+});
+$("model-get").addEventListener("click", () => {
+  openModelMenu();
+  pickModel(state.status.llm.selected);
+});
 $("key-save").addEventListener("click", saveKey);
 $("key-input").addEventListener("keydown", (event) => {
   if (event.key === "Enter") { event.preventDefault(); saveKey(); }

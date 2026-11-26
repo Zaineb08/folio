@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Folio</title>
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="icon" href="/static/icon.svg?v=2" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css?v=2">
 </head>
 <body>
 <svg class="sprite" aria-hidden="true">
@@ -21,7 +21,7 @@
 <div class="app" id="app">
   <aside class="rail">
     <div class="brand">
-      <img src="/static/icon.svg" alt="" width="24" height="24">
+      <img src="/static/icon.svg?v=2" alt="" width="24" height="24">
       <span>Folio</span>
     </div>
 
@@ -48,15 +48,23 @@
       </div>
       <dl class="status">
         <div><dt><span class="dot" id="dot-zotero"></span>Zotero</dt><dd id="st-zotero">Checking</dd></div>
-        <div><dt><span class="dot" id="dot-llm"></span>Model</dt>
-          <dd><select id="model-select" aria-label="Answer model"></select></dd></div>
       </dl>
-      <button type="button" class="link-btn" id="model-get" hidden></button>
-      <div class="sync" id="model-download" hidden>
+      <div class="model-picker" id="model-picker">
+        <button type="button" class="model-trigger" id="model-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="model-menu">
+          <span class="dot" id="dot-llm"></span>
+          <span class="model-trigger-text">
+            <span class="model-trigger-label">Answer model</span>
+            <span class="model-trigger-name" id="model-name">Checking</span>
+          </span>
+          <svg class="chevron" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 7.5 6 4.5l3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="model-menu" id="model-menu" role="menu" aria-label="Answer model" hidden></div>
+      </div>
+      <div class="sync model-progress" id="model-download" hidden>
         <div class="sync-label" id="model-download-label"></div>
         <div class="sync-track"><div class="sync-bar" id="model-download-bar"></div></div>
       </div>
-      <button type="button" class="link-btn" id="manage-key">Add Claude API key</button>
+      <button type="button" class="model-get" id="model-get" hidden></button>
     </div>
   </aside>
 
@@ -79,6 +87,7 @@
             <button type="button" role="radio" data-mode="review" title="A literature-review passage, organised by theme">Lit review</button>
             <button type="button" role="radio" data-mode="compare" title="A table comparing what sources say">Compare</button>
             <button type="button" role="radio" data-mode="gaps" title="Open questions and research gaps">Find gaps</button>
+            <button type="button" role="radio" data-mode="research" title="Searches your papers several times, then explains what it found, in French unless you ask for English">Research</button>
           </div>
           <div class="scope-wrap">
             <button type="button" class="ghost-btn" id="scope-btn" aria-expanded="false"><svg width="14" height="14"><use href="#i-sliders"/></svg> <span id="scope-label">Whole library</span></button>
@@ -129,7 +138,7 @@
         <button type="submit" class="ghost-btn">Add column</button>
       </form>
       <p class="mx-ideas" id="mx-ideas"></p>
-      <p class="claim-disclaimer">Cells are written by the model on this PC from up to 4 passages of each paper: its opening and the 3 that best match the column. Click a page number to check the note against the paper before you rely on it. "Not stated" means those passages didn't say, not that the paper doesn't.</p>
+      <p class="claim-disclaimer">Cells are written by the local model from up to 4 passages of each paper: its opening and the 3 that best match the column. Click a page number to check the note against the paper before you rely on it. "Not stated" means those passages didn't say, not that the paper doesn't.</p>
     </section>
 
     <!-- Library -->
@@ -154,7 +163,7 @@
       <header class="page-head">
         <div>
           <h1>Discover</h1>
-          <p class="sub">Search scholarly works on OpenAlex and add them to Zotero. Only what you type here leaves this PC.</p>
+          <p class="sub">Search scholarly works on OpenAlex and add them to Zotero. Only what you type here leaves your computer.</p>
         </div>
       </header>
       <form class="disc-form" id="disc-form">
@@ -204,7 +213,7 @@
   <h2 id="key-title">Use Claude for answers</h2>
   <p>Claude needs an API key from Anthropic. A claude.ai subscription doesn't include one: the API has its own account and prepaid credit, at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>.</p>
   <ul>
-    <li><strong>What leaves this PC:</strong> the passages found for each question, plus the question. Only while Claude is selected.</li>
+    <li><strong>What leaves your computer:</strong> the passages found for each question, plus the question. Only while Claude is selected.</li>
     <li><strong>Cost:</strong> each answer shows what it cost. Your local model stays free.</li>
     <li><strong>Your key:</strong> Folio checks it with Anthropic, then keeps it in Windows Credential Manager, not in a file.</li>
   </ul>
@@ -220,6 +229,6 @@
 </dialog>
 
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=2"></script>
 </body>
 </html>

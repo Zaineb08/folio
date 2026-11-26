@@ -20,10 +20,10 @@ import threading
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 
-from . import claude, config, llm, store
+from . import claude, config, llm, reading, references, research, store
 from .models import engine, gpu_lock
 from .pdf import ABBREVIATIONS
-from .search import Scope, assess_evidence, paper_passages, retrieve
+from .search import Scope, assess_evidence, named_papers, paper_passages, passages_per_paper, retrieve
 
 log = logging.getLogger("folio.answer")
 
@@ -68,15 +68,42 @@ _MODES["explain"] = {
         "Explain this paper to a new research student, in plain language. Define any technical term the first time you use it. "
         "Use exactly these headings, as Markdown level-2 headings: In one sentence; Why they did it; What they did; What they found; "
         "Limitations; Terms to know; Questions to ask as you read. "
-        "Cite every factual claim about the paper. The excerpts cover only parts of it, so if they don't cover a heading, say that and don't fill the gap. "
-        "Under Terms to know, list up to five terms that matter for understanding this paper. Where the excerpts don't define a term, "
+        "Cite every factual claim about the paper. You have the whole paper, so if it doesn't cover a heading, say that and don't fill the gap. "
+        "Under Terms to know, list up to five terms that matter for understanding this paper. Where the paper doesn't define a term, "
         "you may explain it yourself, but give that line no citation and end it with \"(general definition)\". "
         "Under Questions to ask as you read, give up to three critical questions a careful reader would ask about this paper's methods or conclusions. "
-        "Give those questions no citations or labels, and don't say whether the excerpts answer them."
+        "Give those questions no citations or labels, and don't say whether the paper answers them."
     ),
 }
+_MODES["research"] = {"k": research.MAX_SOURCES, "per_doc": research.PER_PAPER, "instruction": research.INSTRUCTION}
 MODES = tuple(_MODES)
-_OVERVIEW_NOTE = " The excerpts are a sample, with only a passage or two from each article, so answer article by article or theme by theme and don't imply you've read each one in full."
+# Questions about several named papers: each paper gets its own share of passages.
+_PER_PAPER_MODES = ("answer", "review", "compare", "gaps")
+_MAX_PAPERS = 10
+_PASSAGE_BUDGET = {"claude": 48, "local": 24}  # The local model reads 12,288 tokens at most, question and answer included.
+_ASPECTS = 4
+_ASPECTS_PROMPT = """A student asks the same question about each of several research papers.{conversation}
+Question: {question}
+
+List the separate things the question asks about each paper, as short English search phrases, one per line, at most {count}. Only list what to find in the papers' text. Leave out how to present the answer, such as page numbers, order or length, and anything about the papers' reference lists or what they cite."""
+_PER_PAPER_NOTE = (
+    " The excerpts are grouped by paper: up to {per} passages chosen from each of the {count} papers the question is about, "
+    "not the whole papers. Cover every one of those papers, in the order the question gives them. Where a paper's passages "
+    "don't show something, say it isn't in the passages read from that paper, not that the paper doesn't say it."
+)
+_REFERENCES_NOTE = (
+    "\n\nNote: Folio has compared these papers' reference lists itself and shows the result under your answer. "
+    "Don't list any paper's references or citations from the excerpts. Instead, end your answer with one sentence "
+    "saying that the references the papers share are shown below."
+)
+_ASKS_ABOUT_REFERENCES = re.compile(
+    r"\b(r[ée]f[ée]rences?|bibliograph\w*|cit(?:e|es|ed|ing|ation|ations|ent|é|és|ée|ées)|works cited)\b", re.IGNORECASE
+)
+# A follow-up that reaches beyond the papers already under discussion.
+_WIDENS = re.compile(
+    r"\b(other|others|else|my library|whole library|all my|autres?|ma biblioth[eè]que|toute ma|tous mes|d'autres)\b", re.IGNORECASE
+)
+_OVERVIEW_NOTE =" The excerpts are a sample, with only a passage or two from each article, so answer article by article or theme by theme and don't imply you've read each one in full."
 _WEAK_NOTE = (
     " These excerpts match the question only weakly. Say so in your first sentence. Report only what they actually state, "
     "don't turn descriptions of other work into advice or recommendations they don't make, and keep the answer short."
@@ -84,11 +111,17 @@ _WEAK_NOTE = (
 
 _CITATION = re.compile(r"\[(\d+(?:\s*[,;]\s*\d+)*)\]")
 _INNER_REFERENCE = re.compile(r"\s*\[\d+(?:\s*[-–,;]\s*\d+)*\]")
-_SENTENCE_END = re.compile(r"[.!?](?:\s*\[\d+(?:\s*[,;]\s*\d+)*\])*(?=\s+[A-Z(\[\"“*]|\s*$)")
-_NUMBER = re.compile(r"(?<![\w.])\d+(?:[.,]\d+)*(?![\w])")
+# A sentence ends before a capital, including the accented ones that start French sentences.
+_SENTENCE_END = re.compile(r"[.!?](?:\s*\[\d+(?:\s*[,;]\s*\d+)*\])*(?=\s+[A-ZÀ-ÖØ-Þ(\[\"“«*]|\s*$)")
+# French groups thousands with a space, as in "576 000".
+_NUMBER = re.compile(r"(?<![\w.])(?:\d{1,3}(?:[   ]\d{3})+(?![\d.,])|\d+(?:[.,]\d+)*)(?![\w])")
 _LIST_MARKER = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _META_CLAIM = re.compile(
-    r"\b(excerpts?|sources?|provided (?:text|material)|does not|do not|not (?:mention|state|address|discuss|cover)|no information)\b",
+    r"\b(excerpts?|sources?|provided (?:text|material)|does not|do not|doesn't|don't|not (?:mention|state|address|discuss|cover)|no information"
+    # The same, in French: "les extraits ne précisent pas", "aucune information".
+    r"|extraits?|vos (?:articles|papiers)|aucune information|ne \w+ pas|n'\w+ pas"
+    # Pointers to Folio's own comparison of reference lists, shown under the answer.
+    r"|shown below|ci-dessous|reference lists?|listes? de r[ée]f[ée]rences)\b",
     re.IGNORECASE,
 )
 _VERIFY_PROMPT = """Passage:
@@ -99,7 +132,9 @@ Claim: {claim}
 Does the passage support this claim? Reply YES if the passage says this, even in different words. A claim may name the passage's authors, as shown above it. Reply NO if the claim contradicts the passage, swaps who or what did something, credits it to different authors, or adds a specific fact the passage doesn't contain. Reply with one word."""
 
 # Statements about what the excerpts leave out can't be checked against those excerpts.
-_ABOUT_THE_EXCERPTS = re.compile(r"\bexcerpts?\b|^(they|it) (do|does) not\b", re.IGNORECASE)
+_ABOUT_THE_EXCERPTS = re.compile(r"\b(?:excerpts?|extraits?)\b|^(they|it) (do|does) not\b", re.IGNORECASE)
+# Sentences the model marks as its own background explanation, which cite nothing by design.
+_OWN_KNOWLEDGE = ("general definition", "general knowledge", "connaissance générale", "connaissances générales")
 _QUOTED = re.compile(r"[\"“]([^\"”]+)[\"”]")
 _MIN_QUOTE_WORDS = 4
 
@@ -187,6 +222,53 @@ def _excerpt_block(sources: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
+def papers_in_question(request: AskRequest, history: list[dict]) -> tuple[list[str], bool]:
+    """The papers a question is about, and whether they carry over from earlier in the conversation.
+
+    Two or more named papers get read paper by paper. A follow-up that names none stays on the
+    papers the conversation was about, unless it reaches out to the rest of the library.
+    """
+    if request.mode not in _PER_PAPER_MODES:
+        return [], False
+    papers = named_papers(request.question, request.scope)
+    if len(papers) >= 2:
+        return papers[:_MAX_PAPERS], False
+    if papers or not request.scope.is_empty() or _WIDENS.search(request.question):
+        return [], False
+    for message in reversed(history):
+        earlier = (message.get("meta") or {}).get("papers") if message["role"] == "assistant" else None
+        if earlier:
+            return earlier, True
+    return [], False
+
+
+def without_references_request(question: str) -> str:
+    """The question as the model sees it once Folio has compared the reference lists itself.
+
+    A short line asking for shared references is swapped for a note, since a small model asked
+    to skip it lists each paper's citations from the excerpts anyway.
+    """
+    lines = []
+    for line in question.splitlines():
+        if _ASKS_ABOUT_REFERENCES.search(line) and len(line.split()) <= 15:
+            line = "(The references the papers share: Folio answers this part itself, under the answer.)"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _aspects(model: str, history: list[dict], question: str) -> list[str]:
+    """What the question asks of each paper, as search phrases: "their definition of hallucination", ..."""
+    recent = [m for m in history[-2:] if m["role"] == "user"]
+    conversation = f"\nTheir previous question: {recent[-1]['content'][:600]}" if recent else ""
+    prompt = _ASPECTS_PROMPT.format(conversation=conversation, question=question, count=_ASPECTS)
+    try:
+        aspects = research.parse_queries(llm.chat_once(model, [{"role": "user", "content": prompt}], num_predict=120), _ASPECTS)
+    except llm.LLMError as exc:
+        log.warning("Couldn't split the question: %s", exc)  # Searching each paper with the question itself still works.
+        aspects = []
+    return aspects or [question]
+
+
 def helper_model(model: str, settings: dict) -> str:
     """Which model does the side jobs: rewriting follow-ups and checking claims.
 
@@ -213,24 +295,49 @@ def _answer(request: AskRequest, job: Job) -> None:
     job.events.put({"type": "conversation", "id": conversation_id})
 
     job.events.put({"type": "status", "text": "Searching your library"})
-    try:
-        query = _standalone_query(helper, history, request.question) if history else request.question
-    except llm.LLMError as exc:
-        log.warning("Couldn't rewrite the follow-up: %s", exc)  # Searching the question as asked still works.
-        query = request.question
-    coverage = None
-    if request.mode == "explain":
-        hits, coverage = paper_passages(request.scope.doc_keys[0], k=mode["k"])
-        evidence = None
-    else:
-        hits = retrieve(query, request.scope, k=mode["k"], per_doc=mode["per_doc"])
+    coverage = steps = language = per_paper = shared = None
+    papers, inherited = papers_in_question(request, history)
+    to_read = reading.papers_to_read(request.mode, papers, request.scope)
+    if to_read:
+        _answer_in_full(request, job, conversation_id, history, model, uses_claude, helper, to_read, inherited and to_read == papers)
+        return
+    if papers:
+        job.events.put({"type": "status", "text": f"Reading each of the {len(papers)} papers"})
+        aspects = _aspects(helper, history, request.question)
+        per_paper = max(3, min(10, _PASSAGE_BUDGET["claude" if uses_claude else "local"] // len(papers)))
+        hits = passages_per_paper(papers, aspects, per_paper)
+        query = " · ".join(aspects)
         evidence = assess_evidence(hits)
+        if _ASKS_ABOUT_REFERENCES.search(request.question):
+            job.events.put({"type": "status", "text": "Comparing their reference lists"})
+            shared = references.shared(papers)
+            job.events.put({"type": "references", **shared})
+    elif request.mode == "research":
+        language = research.reply_language(history, request.question)
+        hits, steps = research.gather(request.question, history, request.scope, helper, job.events.put, job.cancelled)
+        query = " · ".join(step["query"] for step in steps)
+        evidence = assess_evidence(hits)
+    else:
+        try:
+            query = _standalone_query(helper, history, request.question) if history else request.question
+        except llm.LLMError as exc:
+            log.warning("Couldn't rewrite the follow-up: %s", exc)  # Searching the question as asked still works.
+            query = request.question
+        if request.mode == "explain":
+            hits, coverage = paper_passages(request.scope.doc_keys[0], k=mode["k"])
+            evidence = None
+        else:
+            hits = retrieve(query, request.scope, k=mode["k"], per_doc=mode["per_doc"])
+            evidence = assess_evidence(hits)
     sources = [{"n": number, **hit} for number, hit in enumerate(hits, 1)]
     job.events.put({"type": "sources", "query": query, "sources": sources, "evidence": evidence})
 
+    if job.cancelled.is_set():
+        job.events.put({"type": "done", "conversation_id": conversation_id, "stopped": True})
+        return
     if not sources:
         text = _no_evidence_message(request.scope)
-        store.add_message(conversation_id, "assistant", text, mode=request.mode, query=query)
+        store.add_message(conversation_id, "assistant", text, mode=request.mode, query=query, meta={"steps": steps} if steps else None)
         job.events.put({"type": "token", "text": text})
         job.events.put({"type": "done", "conversation_id": conversation_id})
         return
@@ -238,14 +345,19 @@ def _answer(request: AskRequest, job: Job) -> None:
     recent = history[-4:]
     while recent and recent[0]["role"] != "user":  # Claude requires the first message to be the user's.
         recent = recent[1:]
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": research.system_prompt(language) if language else SYSTEM_PROMPT}]
     for past in recent:
         messages.append({"role": past["role"], "content": _strip_citations(past["content"])})
     note = {"sample": _OVERVIEW_NOTE, "weak": _WEAK_NOTE}.get(evidence, "")
+    if per_paper:
+        note += _PER_PAPER_NOTE.format(per=per_paper, count=len(papers))
+    # After the question, where a small model still has it in mind when it reaches that part.
+    after = _REFERENCES_NOTE if shared else ""
+    asked = without_references_request(request.question) if shared else request.question
     messages.append(
         {
             "role": "user",
-            "content": f"{_excerpt_block(sources)}\n\nTask: {mode['instruction']}{note}\n\nQuestion: {request.question}",
+            "content": f"{_excerpt_block(sources)}\n\nTask: {mode['instruction']}{note}\n\nQuestion: {asked}{after}",
         }
     )
 
@@ -259,6 +371,10 @@ def _answer(request: AskRequest, job: Job) -> None:
 
     label = claude.label(model)
     meta = {"provider": "claude" if uses_claude else "local", "model": model, "label": label, "served_by": model, "served_label": label, "fell_back": False, "evidence": evidence, "coverage": coverage}
+    if steps is not None:
+        meta.update(steps=steps, language=language)
+    if papers:
+        meta.update(papers=papers, papers_inherited=inherited, per_paper=per_paper, references=shared)
     parts: list[str] = []
     stopped = False
     try:
@@ -279,6 +395,17 @@ def _answer(request: AskRequest, job: Job) -> None:
         return
     text = "".join(parts).strip()
 
+    _check_and_store(job, conversation_id, request, query, text, sources, stopped, meta, helper)
+
+
+def _check_and_store(job: Job, conversation_id: int, request: AskRequest, query: str, text: str, sources: list[dict],
+                     stopped: bool, meta: dict, helper: str, keep_only_cited: bool = False, num_ctx: int | None = None) -> None:
+    """Check each claim against its passage, then save the answer.
+
+    keep_only_cited saves just the passages the answer cites, for answers that read whole papers.
+    num_ctx is the context the helper is already loaded with, so checking doesn't load it again.
+    """
+    same_context = {"num_ctx": num_ctx} if num_ctx else {}
     checks = None
     if text and not stopped:
         job.events.put({"type": "status", "text": "Checking each claim against its source"})
@@ -288,7 +415,7 @@ def _answer(request: AskRequest, job: Job) -> None:
                 return True
             prompt = _VERIFY_PROMPT.format(passage=passage, claim=claim)
             try:
-                reply = llm.chat_once(helper, [{"role": "user", "content": prompt}], num_predict=4)
+                reply = llm.chat_once(helper, [{"role": "user", "content": prompt}], num_predict=4, **same_context)
             except llm.Declined:
                 return True  # A filter refusing the check says nothing about the claim.
             return not reply.strip().upper().startswith("NO")
@@ -300,10 +427,129 @@ def _answer(request: AskRequest, job: Job) -> None:
             job.events.put({"type": "check", **checks})
         except llm.LLMError as exc:
             log.warning("Couldn't check citations: %s", exc)  # The answer itself is still good to show.
+    if keep_only_cited:
+        cited = set(checks["cited"]) if checks else {int(n) for n in re.findall(r"\[(\d+)", text)}
+        sources = [source for source in sources if source["n"] in cited]
+        job.events.put({"type": "sources", "query": query, "sources": sources, "evidence": meta.get("evidence")})
     job.events.put({"type": "meta", **meta})
     if text:
         store.add_message(conversation_id, "assistant", text, mode=request.mode, query=query, sources=sources, checks=checks, meta=meta)
     job.events.put({"type": "done", "conversation_id": conversation_id, "stopped": stopped})
+
+
+def _earlier(history: list[dict]) -> str:
+    """The last exchange, so a follow-up such as "and their methods?" can be understood."""
+    recent = [f"{'Student' if m['role'] == 'user' else 'Assistant'}: {_strip_citations(m['content'])[:700]}" for m in history[-2:]]
+    return "\n".join(recent)
+
+
+def _answer_in_full(request: AskRequest, job: Job, conversation_id: int, history: list[dict], model: str,
+                    uses_claude: bool, helper: str, papers: list[str], inherited: bool) -> None:
+    """Read each paper in full, one per call, then put the answers together."""
+    explain = request.mode == "explain"
+    shared = None
+    if not explain and len(papers) >= 2 and _ASKS_ABOUT_REFERENCES.search(request.question):
+        job.events.put({"type": "status", "text": "Comparing their reference lists"})
+        shared = references.shared(papers)
+        job.events.put({"type": "references", **shared})
+    asked = without_references_request(request.question) if shared else request.question
+    earlier = _earlier(history) if history else ""
+
+    readings, number = [], 1
+    for key in papers:
+        doc, sources, total = reading.paper_sources(key, number)
+        if sources:
+            readings.append((doc, sources, total))
+            number += len(sources)
+    all_sources = [source for _, sources, _ in readings for source in sources]
+    query = "Read in full: " + " · ".join(sources[0]["cite"] for _, sources, _ in readings)
+    job.events.put({"type": "sources", "query": query, "sources": all_sources, "evidence": None})
+    if not readings:
+        text = _no_evidence_message(request.scope)
+        store.add_message(conversation_id, "assistant", text, mode=request.mode, query=query)
+        job.events.put({"type": "token", "text": text})
+        job.events.put({"type": "done", "conversation_id": conversation_id})
+        return
+
+    label = claude.label(model)
+    meta = {"provider": "claude" if uses_claude else "local", "model": model, "label": label, "served_by": model,
+            "served_label": label, "fell_back": False, "evidence": None, "coverage": None}
+    costs: list[float] = []
+
+    def finished(details: dict) -> None:  # Each call reports its own cost, so add them up.
+        if details.get("cost_usd") is not None:
+            costs.append(details["cost_usd"])
+        meta.update({key: value for key, value in details.items() if key != "cost_usd"})
+
+    parts: list[str] = []
+    answers: list[str] = []
+    steps: list[dict] = []
+    stopped = False
+    # One context for the whole job: a local model is loaded again whenever it changes, which takes a while for large ones.
+    job_ctx = None if uses_claude else max(reading.context_for(sources) for _, sources, _ in readings)
+    same_context = {"num_ctx": job_ctx} if job_ctx else {}
+
+    def emit(text: str) -> None:
+        parts.append(text)
+        job.events.put({"type": "token", "text": text})
+
+    def stream(messages: list[dict], **options) -> str:
+        nonlocal stopped
+        written = []
+        for token in llm.chat_stream(model, messages, on_finish=finished, **options):
+            if job.cancelled.is_set():
+                stopped = True
+                break
+            written.append(token)
+            emit(token)
+        return "".join(written).strip()
+
+    try:
+        with nullcontext() if uses_claude else gpu_lock:  # Claude leaves the GPU free for indexing.
+            if not uses_claude:
+                engine.release_gpu()
+            for doc, sources, total in readings:
+                if stopped or job.cancelled.is_set():
+                    stopped = True
+                    break
+                cite = sources[0]["cite"]
+                job.events.put({"type": "status", "text": f"Reading {cite} in full ({len(sources)} passages)"})
+                step = {"kind": "read", "cite": cite, "doc_key": doc["key"], "passages": len(sources), "total": total}
+                steps.append(step)
+                job.events.put({"type": "step", **step})
+                heading = "" if explain else f"## {cite} · {doc['title']}\n\n"
+                if heading:
+                    emit(heading)
+                options = {"num_predict": reading.ANSWER_TOKENS["explain" if explain else "paper"], **same_context}
+                instruction = _MODES["explain"]["instruction"] if explain else reading.one_paper_instruction(cite, request.question)
+                answer = stream(reading.paper_messages(sources, asked, instruction, earlier), **options)
+                answers.append(f"{heading}{answer}")
+                emit("\n\n")
+            if len(readings) >= 2 and not stopped:
+                job.events.put({"type": "status", "text": "Putting the answers together"})
+                emit(f"{reading.synthesis_heading(request.question)}\n\n")
+                together = _MODES[request.mode]["instruction"] if request.mode in ("review", "compare", "gaps") else None
+                if shared:
+                    together = f"{together or ''} End with one sentence saying that the references the papers share are shown below.".strip()
+                stream(reading.synthesis_messages("\n\n".join(answers), asked, together), num_predict=reading.ANSWER_TOKENS["synthesis"], **same_context)
+    except llm.Declined as exc:
+        log.info("Declined, category %s", exc.category)
+        job.events.put({"type": "reset"})  # Text from before a decline can't be relied on.
+        job.events.put({"type": "error", "message": str(exc)})
+        job.events.put({"type": "done", "conversation_id": conversation_id})
+        return
+
+    if costs:
+        meta["cost_usd"] = round(sum(costs), 4)
+    shortened = [step["cite"] for step in steps if step["passages"] < step["total"]]
+    meta.update(steps=steps, full_read={"papers": len(steps), "passages": sum(step["passages"] for step in steps), "shortened": shortened})
+    if explain and steps:
+        meta["coverage"] = {"used": steps[0]["passages"], "total": steps[0]["total"]}
+    if not explain:
+        meta.update(papers=papers, papers_inherited=inherited, references=shared)
+    text = "".join(parts).strip()
+    _check_and_store(job, conversation_id, request, query, text, all_sources, stopped, meta, helper, keep_only_cited=True,
+                     num_ctx=job_ctx if helper == model else None)
 
 
 def _no_evidence_message(scope: Scope) -> str:
@@ -344,8 +590,11 @@ def split_claims(answer: str) -> list[str]:
 
 def _numbers_in(text: str) -> set[str]:
     numbers = set()
+    text = re.sub(r"(?<=\d), (?=\d{3}(?!\d))", ",", text)  # PDFs often print 1,137 as "1, 137".
     for number in _NUMBER.findall(text):
-        number = number.replace(",", "")
+        number = re.sub(r"[   ]", "", number)
+        # "19,7" is French for 19.7; a thousands separator is always followed by three digits.
+        number = number.replace(",", ".") if re.fullmatch(r"\d+,\d{1,2}", number) else number.replace(",", "")
         numbers.add(number.rstrip("0").rstrip(".") if "." in number else number)  # 77.0 and 77 are the same figure.
     return numbers
 
@@ -376,7 +625,7 @@ def check_citations(answer: str, sources: list[dict], is_supported) -> dict:
             next_is_cited = index + 1 < len(claims) and _CITATION.search(claims[index + 1])
             is_lead_in = index == 0 or bare.endswith(":") or next_is_cited
             # A question for the reader, or a term the model openly defined itself, isn't a claim about the paper.
-            not_a_claim = bare.endswith("?") or "general definition" in bare.lower()
+            not_a_claim = bare.endswith("?") or any(marker in bare.lower() for marker in _OWN_KNOWLEDGE)
             if not is_lead_in and not not_a_claim and len(bare.split()) >= 10 and not _META_CLAIM.search(bare) and not claim.startswith("|"):
                 flags.append({"text": claim, "kind": "uncited", "detail": "This claim has no citation."})
                 total += 1

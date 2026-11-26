@@ -1,6 +1,6 @@
 """Find new articles through OpenAlex or Crossref (free, no account) and add them to Zotero.
 
-Only what the student types here leaves this PC. Nothing from their library or
+Only what the student types here leaves the computer. Nothing from their library or
 their questions is sent. PDFs are fetched only for open-access articles they choose.
 """
 
@@ -190,7 +190,7 @@ def search(query: str, open_access_only: bool = True, year_min: int | None = Non
 
 
 def _is_public_host(host: str) -> bool:
-    """Refuse to fetch from this PC or its local network."""
+    """Refuse to fetch from the computer itself or its local network."""
     try:
         addresses = socket.getaddrinfo(host, None)
     except socket.gaierror:

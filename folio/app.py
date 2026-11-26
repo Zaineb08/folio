@@ -1,4 +1,4 @@
-"""The local web server behind Folio's interface. It only ever listens on this PC."""
+"""The local web server behind Folio's interface. It only ever listens on the local computer."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ class LocalOnly:
         origin = headers.get("origin")
         origin_host = urlparse(origin).hostname if origin else None
         if host not in _LOCAL_HOSTS or (origin and origin_host not in _LOCAL_HOSTS):
-            await Response("Folio only accepts requests from this PC.", status_code=403)(scope, receive, send)
+            await Response("Folio only accepts requests from the computer it runs on.", status_code=403)(scope, receive, send)
             return
 
         async def send_with_headers(message) -> None:
@@ -93,7 +93,7 @@ def _warm_up() -> None:
 
 
 def settle_answer_model(installed: list[str]) -> None:
-    """Until the student picks a model, use the one this PC suits, or failing that, the other one installed.
+    """Until the student picks a model, use the one that suits the computer, or failing that, the other one installed.
 
     So someone who downloaded the larger model on a smaller PC still gets answers, just slower.
     """
@@ -156,7 +156,7 @@ def status() -> dict:
             "selected": selected,
             "installed": has_key if uses_claude else selected in models,
         },
-        # Folio's own models, offered for download when they're missing. "suits" marks the one for this PC.
+        # Folio's own models, offered for download when they're missing. "suits" marks the one for this computer.
         "suggested": [
             {"id": model, "download_gb": size, "suits": model == config.recommended_model()}
             for model, size in config.LLM_DOWNLOAD_GB.items()
@@ -299,7 +299,7 @@ def _require_doc(doc_key: str) -> dict:
 def _require_pdf(doc: dict) -> str:
     path = doc.get("pdf_path")
     if not path or not os.path.isfile(path):
-        raise HTTPException(404, "This article has no PDF on this PC.")
+        raise HTTPException(404, "This article has no PDF in Zotero.")
     return path
 
 
@@ -562,4 +562,14 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+class _FreshStaticFiles(StaticFiles):
+    """The interface's own files. Browsers check for a newer copy on every load, which costs
+    nothing on this computer, so a new version of Folio shows without a forced refresh."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/static", _FreshStaticFiles(directory=STATIC_DIR), name="static")

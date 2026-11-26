@@ -76,14 +76,17 @@ def test_strong_evidence_adds_no_warning(monkeypatch):
 # ----------------------------------------------------------- explain this paper
 
 
-def test_explaining_uses_passages_from_across_the_paper(monkeypatch):
-    monkeypatch.setattr(answer, "paper_passages", lambda key, k: ([hit(1.0), hit(1.0, chunk_id=2)], {"used": 2, "total": 40}))
+def test_explaining_reads_the_whole_paper(monkeypatch):
+    whole = [{"n": n, **hit(1.0, chunk_id=n, page=n, text=f"Passage {n} of the paper.")} for n in range(1, 41)]
+    monkeypatch.setattr(answer.reading, "paper_sources", lambda key, first: ({"key": key, "title": "T"}, whole, 40))
     monkeypatch.setattr(answer, "retrieve", lambda *a, **k: pytest.fail("explaining shouldn't search by the question"))
     events, sent, saved = run_explain(monkeypatch)
     prompt = sent[0][-1]["content"]
     assert "new research student" in prompt and "Terms to know" in prompt and "Questions to ask as you read" in prompt
-    assert of_type(events, "sources")["evidence"] is None, "these passages are chosen, not matched, so no score applies"
-    assert saved[-1]["meta"]["coverage"] == {"used": 2, "total": 40}
+    assert "[1] (p. 1) Passage 1" in prompt and "[40] (p. 40) Passage 40" in prompt, "every passage, in the paper's order"
+    assert of_type(events, "sources")["evidence"] is None, "the whole paper is read, so no match score applies"
+    assert saved[-1]["meta"]["coverage"] == {"used": 40, "total": 40}
+    assert [s["n"] for s in saved[-1]["sources"]] == [1], "only the cited passage is saved with the answer"
 
 
 def run_explain(monkeypatch):

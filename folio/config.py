@@ -60,7 +60,7 @@ def gpu_memory_gb() -> float | None:
 
 @functools.lru_cache(maxsize=1)
 def recommended_model() -> str:
-    """The answer model this PC can run at a usable speed."""
+    """The answer model the computer can run at a usable speed."""
     gpu = gpu_memory_gb()
     return LARGE_LLM if gpu and gpu >= _LARGE_LLM_MIN_GPU_GB else SMALL_LLM
 

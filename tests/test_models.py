@@ -38,8 +38,8 @@ def test_models_never_load_at_the_same_time(monkeypatch):
     monkeypatch.setattr(sentence_transformers, "SentenceTransformer", fake_model(recorder))
     monkeypatch.setattr(sentence_transformers, "CrossEncoder", fake_model(recorder))
     engine = models._Engine()
-    engine._gpu_ok = True  # So indexing loads its own copy, whatever this PC has.
-    threads =[threading.Thread(target=load) for load in (engine._load_query_embedder, engine._load_reranker, engine._load_bulk)]
+    engine._gpu_ok = True  # So indexing loads its own copy, whatever the computer running the tests has.
+    threads = [threading.Thread(target=load) for load in (engine._load_query_embedder, engine._load_reranker, engine._load_bulk)]
     for thread in threads:
         thread.start()
     for thread in threads:

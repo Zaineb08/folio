@@ -21,6 +21,18 @@ def test_index_is_served_with_a_strict_content_policy(client):
     assert "script-src 'self'" in policy and "unsafe-inline" not in policy
 
 
+def test_browsers_check_for_new_versions_of_the_interface(client):
+    """Otherwise a browser can keep showing the old look for a day after Folio is updated."""
+    for path in ("/static/styles.css", "/static/app.js", "/static/icon.svg"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-cache"
+    # A copy the browser already has is confirmed without being sent again.
+    first = client.get("/static/styles.css")
+    again = client.get("/static/styles.css", headers={"if-none-match": first.headers["etag"]})
+    assert again.status_code == 304
+
+
 def test_requests_for_other_hosts_are_refused(client):
     assert client.get("/api/library", headers={"host": "evil.example"}).status_code == 403
 

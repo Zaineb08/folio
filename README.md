@@ -59,8 +59,19 @@ Either way, Folio notices new articles within about 30 seconds and indexes them 
 | Lit review | A passage organised by theme, for a thesis draft |
 | Compare | A table of what each source says, then where they agree and disagree |
 | Find gaps | Open questions and limitations the sources name |
+| Research | Several searches, then an explanation step by step, in French unless you ask for English |
 
 The filter button next to the modes limits a question to certain Zotero collections, tags or years. **Ask about this** in the Library limits it to one article.
+
+**Ask about specific papers, read in full.** When a question names two to eight papers, by title, by a short name such as "CodeHalu", or by author and year, Folio has the model read each one in full, every page, one paper at a time, so nothing in a paper is missed and two papers can't be mixed up. It answers for each paper in turn, then adds a short part that puts the papers together. **Ask about this** in the Library and **Explain this paper** read the whole paper the same way. Definitions and quotations stay in the paper's own words, even in an answer in French. Reading in full takes longer than a search: you see each paper being read. Follow-up questions stay on those papers until you ask about the rest of your library. With more than eight papers, Folio reads each one's best passages for each part of the question instead. If the question asks which references the papers share, Folio compares their reference lists itself, matching works by title, and shows the result under the answer. Click a paper there to see the entry in its reference list. A work cited under a different title, or only as a web page, isn't counted. A paper that's in Zotero more than once is always read once, using the copy with the PDF.
+
+**Research a question.** In **Research** mode, Folio works like a research assistant. It takes longer than the other modes:
+1. **It plans.** The local model translates your question into English, using the words your papers' titles use, and splits it into a few searches.
+2. **It searches.** It runs each search and lists it as it goes, with how many passages and papers each found.
+3. **It looks for gaps.** It reads what it found and searches again for any part of the question that isn't covered.
+4. **It explains.** The answer model explains what the papers say, with a short answer first and then the details under headings, and cites every claim. It may explain a general idea from its own knowledge when that helps, such as what a CVE is, but it marks that sentence "(connaissance générale)" and gives it no citation, so you can tell it apart from what your papers say.
+
+It answers in French unless you ask otherwise. Write "answer in English" or "réponds en anglais" at any point, and it stays in English until you ask for French again. Quotations stay in English, as the papers wrote them. The usual checks run on every answer. The searches it ran stay folded above the answer, so you can see what it looked for and what it might have missed.
 
 **Understand a paper.** **Explain this paper**, in the Library or above a PDF page, gives a plain-language guide: why they did it, what they did, what they found, the limitations, terms to know, and questions to ask as you read. It takes under a minute with a graphics card, and longer without one. It's based on 12 passages chosen from across the paper, and says how many that is out of the total, so use it to prepare for reading the paper, not to replace it. Follow-up questions stay on that paper, and you can ask them in French.
 
